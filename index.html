@@ -1,0 +1,477 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SAHS Days 2026 Attendance</title>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+
+<style>
+:root {
+  --blue: #2453d4;
+  --ink: #202637;
+  --muted: #657184;
+  --bg: #f3f5f9;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: Arial, Helvetica, sans-serif;
+}
+.wrap {
+  max-width: 760px;
+  margin: auto;
+  padding: 20px 14px 32px;
+}
+.hero, .card {
+  background: white;
+  border-radius: 24px;
+  padding: 24px;
+  margin-bottom: 18px;
+  box-shadow: 0 8px 26px #16223d0f;
+}
+h1 { margin: 0 0 8px; font-size: 28px; }
+h2 { margin: 0 0 18px; font-size: 22px; }
+p { color: var(--muted); line-height: 1.5; }
+label {
+  display: block;
+  margin: 16px 0 8px;
+  font-weight: 700;
+}
+select, input, button {
+  width: 100%;
+  min-height: 54px;
+  border-radius: 12px;
+  font: inherit;
+}
+select, input {
+  border: 1px solid #ccd2dc;
+  background: white;
+  padding: 12px 14px;
+  color: var(--ink);
+}
+button {
+  border: 0;
+  background: var(--blue);
+  color: white;
+  font-weight: 700;
+  padding: 14px;
+  cursor: pointer;
+  margin-top: 14px;
+}
+button.secondary {
+  background: #eef0f4;
+  color: #111827;
+}
+button:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+#reader {
+  width: 100%;
+  overflow: hidden;
+  border-radius: 14px;
+}
+.status {
+  border-radius: 14px;
+  padding: 16px;
+  margin-top: 16px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.info { background: #eef3ff; color: #1d3e91; }
+.success {
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #a7e5b8;
+}
+.error {
+  background: #fee2e2;
+  color: #922727;
+  border: 1px solid #efb1b1;
+}
+.hidden { display: none; }
+.person {
+  margin-top: 10px;
+  border-top: 1px solid #0002;
+  padding-top: 10px;
+}
+.person div { margin: 5px 0; }
+footer {
+  text-align: center;
+  color: var(--muted);
+  padding: 12px;
+}
+@media (max-width: 480px) {
+  .hero, .card { padding: 20px; border-radius: 20px; }
+  h1 { font-size: 25px; }
+}
+</style>
+</head>
+
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <h1>SAHS Days 2026</h1>
+    <p>QR Attendance Monitoring · October 19–20, 2026</p>
+
+    <label for="group">Attendance Group</label>
+    <select id="group">
+      <option value="Participant">Participant</option>
+      <option value="Committee">Working Committee</option>
+    </select>
+
+    <label for="checkpoint">Attendance Checkpoint</label>
+    <select id="checkpoint"></select>
+  </header>
+
+  <section class="card">
+    <h2>Scan QR Code</h2>
+    <p>Allow camera access. The QR code should contain the person's ID number.</p>
+
+    <div id="reader"></div>
+
+    <button id="startBtn" type="button">Start Scanning</button>
+    <button id="stopBtn" class="secondary" type="button" disabled>
+      Stop Scanning
+    </button>
+
+    <div id="connection" class="status info">
+      Checking attendance server connection…
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Enter ID Manually</h2>
+
+    <label for="manualId">ID Number</label>
+    <input
+      id="manualId"
+      inputmode="numeric"
+      autocomplete="off"
+      placeholder="Enter ID number"
+    >
+
+    <button id="recordBtn" type="button">Record Attendance</button>
+    <div id="result" class="status hidden" aria-live="polite"></div>
+  </section>
+
+  <footer>SAHS Days 2026 · Attendance Monitoring</footer>
+</div>
+
+<script>
+// YOUR GOOGLE APPS SCRIPT WEB APP URL
+const SCRIPT_URL =
+  "https://script.google.com/macros/s/AKfycbwTc4BujrhyucwOp1BZTpfHUwsyr5Th8BRJsT58aAH5BV6BSizkPG8WCQUoWZ7avK9e2w/exec";
+
+const groupEl = document.getElementById("group");
+const checkpointEl = document.getElementById("checkpoint");
+const connectionEl = document.getElementById("connection");
+const resultEl = document.getElementById("result");
+const manualIdEl = document.getElementById("manualId");
+const startBtn = document.getElementById("startBtn");
+const stopBtn = document.getElementById("stopBtn");
+const recordBtn = document.getElementById("recordBtn");
+
+let scanner = null;
+let scannerRunning = false;
+let lastScanned = "";
+let lastScanAt = 0;
+let requestCounter = 0;
+
+// Safely display text returned by the server.
+function esc(value) {
+  return String(value == null ? "" : value).replace(/[&<>"']/g, c => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  }[c]));
+}
+
+function showMessage(element, type, title, message, person) {
+  element.className = "status " + type;
+
+  let html =
+    "<strong>" + esc(title) + "</strong>" +
+    "<div>" + esc(message) + "</div>";
+
+  if (person) {
+    html +=
+      '<div class="person">' +
+      '<div><b>Name:</b> ' + esc(person.name || "—") + '</div>' +
+      '<div><b>ID:</b> ' + esc(person.id || "—") + '</div>' +
+      '<div><b>Program:</b> ' + esc(person.program || "—") + '</div>' +
+      '<div><b>Section:</b> ' + esc(person.section || "—") + '</div>' +
+      '<div><b>Team/Committee:</b> ' +
+      esc(person.team || person.committee || "—") +
+      '</div></div>';
+  }
+
+  element.innerHTML = html;
+}
+
+// Communicate with Apps Script using JSONP.
+function jsonp(params, timeoutMs = 15000) {
+  return new Promise((resolve, reject) => {
+    const callbackName = "sahsJsonpCallback" + (++requestCounter);
+    const script = document.createElement("script");
+    let finished = false;
+
+    const timer = setTimeout(() => {
+      finish(new Error("The server did not respond in time."));
+    }, timeoutMs);
+
+    function cleanup() {
+      clearTimeout(timer);
+
+      try {
+        delete window[callbackName];
+      } catch (error) {
+        window[callbackName] = undefined;
+      }
+
+      if (script.parentNode) {
+        script.parentNode.removeChild(script);
+      }
+    }
+
+    function finish(error, data) {
+      if (finished) return;
+      finished = true;
+      cleanup();
+
+      if (error) reject(error);
+      else resolve(data);
+    }
+
+    window[callbackName] = data => finish(null, data);
+
+    const query = new URLSearchParams({
+      ...params,
+      callback: callbackName,
+      _: Date.now()
+    });
+
+    script.onerror = () => {
+      finish(new Error(
+        "Could not contact the attendance server. Check the Apps Script deployment and try again."
+      ));
+    };
+
+    script.src = SCRIPT_URL + "?" + query.toString();
+    document.head.appendChild(script);
+  });
+}
+
+// Check whether Apps Script is reachable.
+async function checkConnection() {
+  try {
+    const data = await jsonp({ action: "ping" });
+
+    if (data && data.success) {
+      showMessage(
+        connectionEl,
+        "success",
+        "Connected",
+        data.message || "Attendance server is online."
+      );
+    } else {
+      showMessage(
+        connectionEl,
+        "error",
+        "Connection Error",
+        data?.message || "Unexpected server response."
+      );
+    }
+  } catch (error) {
+    showMessage(
+      connectionEl,
+      "error",
+      "Connection Error",
+      error.message
+    );
+  }
+}
+
+// Update checkpoint choices based on the selected group.
+function updateCheckpoints() {
+  const options = groupEl.value === "Committee"
+    ? ["Committee In", "Committee Out"]
+    : ["Morning In", "Morning Out", "Afternoon In", "Afternoon Out"];
+
+  checkpointEl.innerHTML = "";
+
+  options.forEach(value => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    checkpointEl.appendChild(option);
+  });
+}
+
+groupEl.addEventListener("change", updateCheckpoints);
+
+// Record attendance by scanned or manually entered ID.
+async function submitId(rawId) {
+  const id = String(rawId || "").trim();
+
+  if (!id) {
+    showMessage(resultEl, "error", "Missing ID", "Enter or scan an ID number.");
+    return;
+  }
+
+  recordBtn.disabled = true;
+
+  showMessage(
+    resultEl,
+    "info",
+    "Recording…",
+    "Sending attendance to the server."
+  );
+
+  try {
+    const data = await jsonp({
+      action: "recordScan",
+      id: id,
+      checkpoint: checkpointEl.value,
+      group: groupEl.value
+    });
+
+    if (data && data.success) {
+      showMessage(
+        resultEl,
+        "success",
+        "Attendance Recorded",
+        data.message,
+        data.person
+      );
+
+      manualIdEl.value = "";
+    } else {
+      showMessage(
+        resultEl,
+        data && data.duplicate ? "info" : "error",
+        data && data.duplicate
+          ? "Already Recorded"
+          : "Attendance Not Recorded",
+        data?.message || "Unexpected server response.",
+        data?.person
+      );
+    }
+  } catch (error) {
+    showMessage(resultEl, "error", "Connection Error", error.message);
+  } finally {
+    recordBtn.disabled = false;
+  }
+}
+
+recordBtn.addEventListener("click", () => submitId(manualIdEl.value));
+
+manualIdEl.addEventListener("keydown", event => {
+  if (event.key === "Enter") {
+    submitId(manualIdEl.value);
+  }
+});
+
+// Start the phone camera.
+async function startScanning() {
+  if (scannerRunning) return;
+
+  if (typeof Html5Qrcode === "undefined") {
+    showMessage(
+      resultEl,
+      "error",
+      "Scanner Unavailable",
+      "The QR scanning library did not load. Check your internet connection and reload."
+    );
+    return;
+  }
+
+  try {
+    scanner = new Html5Qrcode("reader");
+
+    const cameras = await Html5Qrcode.getCameras();
+
+    if (!cameras || cameras.length === 0) {
+      throw new Error("No camera found.");
+    }
+
+    const camera =
+      cameras.find(c => /back|rear|environment/i.test(c.label)) ||
+      cameras[cameras.length - 1];
+
+    await scanner.start(
+      camera.id,
+      {
+        fps: 10,
+        qrbox: { width: 250, height: 180 },
+        aspectRatio: 1.4
+      },
+      decodedText => {
+        const now = Date.now();
+
+        // Avoid submitting the same QR repeatedly in quick succession.
+        if (
+          decodedText === lastScanned &&
+          now - lastScanAt < 2500
+        ) {
+          return;
+        }
+
+        lastScanned = decodedText;
+        lastScanAt = now;
+        manualIdEl.value = decodedText.trim();
+        submitId(decodedText);
+      },
+      () => {}
+    );
+
+    scannerRunning = true;
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+
+    showMessage(
+      connectionEl,
+      "info",
+      "Camera Active",
+      "Point the camera at an ID QR code."
+    );
+  } catch (error) {
+    showMessage(
+      resultEl,
+      "error",
+      "Camera Error",
+      error.message || "Could not start camera."
+    );
+  }
+}
+
+async function stopScanning() {
+  if (!scanner || !scannerRunning) return;
+
+  try {
+    await scanner.stop();
+    await scanner.clear();
+  } catch (error) {}
+
+  scannerRunning = false;
+  scanner = null;
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+}
+
+startBtn.addEventListener("click", startScanning);
+stopBtn.addEventListener("click", stopScanning);
+
+// Initialize the page.
+updateCheckpoints();
+checkConnection();
+</script>
+</body>
+</html>
