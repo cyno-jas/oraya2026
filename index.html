@@ -217,52 +217,42 @@ function showMessage(element, type, title, message, person) {
 }
 
 // Communicate with Apps Script using JSONP.
-function jsonp(params, timeoutMs = 15000) {
+// Communicate with Apps Script using JSONP.
+function jsonp(params, timeoutMs = 20000) {
   return new Promise((resolve, reject) => {
     const callbackName = "sahsJsonpCallback" + (++requestCounter);
     const script = document.createElement("script");
     let finished = false;
 
     const timer = setTimeout(() => {
-      finish(new Error("The server did not respond in time."));
+      finish(new Error("Request timed out. Check the Apps Script deployment."));
     }, timeoutMs);
 
     function cleanup() {
       clearTimeout(timer);
-
-      try {
-        delete window[callbackName];
-      } catch (error) {
-        window[callbackName] = undefined;
-      }
-
-      if (script.parentNode) {
-        script.parentNode.removeChild(script);
-      }
+      delete window[callbackName];
+      script.remove();
     }
 
     function finish(error, data) {
       if (finished) return;
       finished = true;
       cleanup();
-
       if (error) reject(error);
       else resolve(data);
     }
 
     window[callbackName] = data => finish(null, data);
 
-    const query = new URLSearchParams({
-      ...params,
-      callback: callbackName,
-      _: Date.now()
-    });
+    const query = new URLSearchParams();
+    Object.keys(params).forEach(key => query.set(key, params[key]));
+    query.set("callback", callbackName);
+    query.set("_", Date.now());
 
-    script.onerror = () => {
-      finish(new Error(
-        "Could not contact the attendance server. Check the Apps Script deployment and try again."
-      ));
-    };
+    script.async = true;
+    script.onerror = () => finish(
+      new Error("Apps Script did not return a usable response. Check deployment access and URL.")
+    );
 
     script.src = SCRIPT_URL + "?" + query.toString();
     document.head.appendChild(script);
